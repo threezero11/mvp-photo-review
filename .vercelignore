@@ -1,0 +1,7 @@
+# Only files needed to build the public website are uploaded.
+*
+!index.html
+!package.json
+!package-lock.json
+!vercel.json
+!.vercelignore

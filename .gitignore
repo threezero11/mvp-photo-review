@@ -7,3 +7,7 @@ supabase/.temp/
 .DS_Store
 npm-debug.log*
 dist/
+.vercel
+
+# Local installation and verification notes
+진행기록.md
