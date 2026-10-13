@@ -1,0 +1,16 @@
+{
+  "name": "mvp-photo-review",
+  "version": "0.1.0",
+  "private": true,
+  "description": "중고거래 상품 사진 검토 MVP",
+  "scripts": {
+    "supabase": "supabase",
+    "build": "node -e \"const fs=require('node:fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('index.html','dist/index.html')\""
+  },
+  "allowScripts": {
+    "supabase": true
+  },
+  "devDependencies": {
+    "supabase": "^2.120.0"
+  }
+}
