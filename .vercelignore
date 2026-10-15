@@ -5,3 +5,7 @@
 !package-lock.json
 !vercel.json
 !.vercelignore
+!build.cjs
+!detector-worker.js
+!assets/
+!assets/**

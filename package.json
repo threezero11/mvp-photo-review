@@ -5,12 +5,15 @@
   "description": "중고거래 상품 사진 검토 MVP",
   "scripts": {
     "supabase": "supabase",
-    "build": "node -e \"const fs=require('node:fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('index.html','dist/index.html')\""
+    "build": "node build.cjs"
   },
   "allowScripts": {
     "supabase": true
   },
   "devDependencies": {
     "supabase": "^2.120.0"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.30.0"
   }
 }
