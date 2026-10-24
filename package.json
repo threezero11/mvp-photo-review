@@ -2,7 +2,7 @@
   "name": "mvp-photo-review",
   "version": "0.1.0",
   "private": true,
-  "description": "중고거래 상품 사진 검토 MVP",
+  "description": "AI 사진 분석 체험 및 사업화 검토 MVP",
   "scripts": {
     "supabase": "supabase",
     "build": "node build.cjs"
