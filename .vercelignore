@@ -1,11 +1,9 @@
-# Only files needed to build the public website are uploaded.
+# Only the static camera app and its build inputs go to Vercel.
 *
 !index.html
+!camera.js
 !package.json
 !package-lock.json
 !vercel.json
 !.vercelignore
 !build.cjs
-!detector-worker.js
-!assets/
-!assets/**

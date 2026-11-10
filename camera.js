@@ -2,10 +2,11 @@
 const API='https://nhdqfexqymbdarbtmohj.supabase.co/functions/v1/capture-vault';
 const $=id=>document.getElementById(id);
 const purposes={general:'일반 사진 증빙',trade:'중고거래 · 물품 상태',profile:'맞선 · 프로필 제출',work:'작업 완료 · 현장 보고'};
-let stream=null,session=null,photo=null,capturedAt=null,photoUrl=null,receiptUrl=null,facing='environment',busy=false,opening=false,cameraRun=0,currentToken=null,receiptRun=0;
+let stream=null,session=null,photo=null,capturedAt=null,photoUrl=null,receiptUrl=null,facing='environment',mirrorFront=true,actualFacing='environment',busy=false,opening=false,cameraRun=0,currentToken=null,receiptRun=0;
 const management=new Map();
 function show(name){for(const id of ['home','capture','receipt'])$(id).hidden=id!==name;window.scrollTo({top:0,behavior:'instant'});$(name+'-title').focus({preventScroll:true});}
-function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}$('video').srcObject=null;$('video').hidden=true;$('live-label').hidden=true;$('shutter').hidden=true;$('switch-camera').hidden=true;}
+function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}$('video').srcObject=null;$('video').hidden=true;$('live-label').hidden=true;$('shutter').hidden=true;$('switch-camera').hidden=true;$('mirror-camera').hidden=true;}
+function updateMirror(){const front=actualFacing==='user';$('mirror-camera').hidden=!front||!stream;$('mirror-camera').setAttribute('aria-pressed',String(mirrorFront));$('mirror-camera').textContent='전면 좌우반전 '+(mirrorFront?'켜짐':'꺼짐');$('video').style.transform=front&&mirrorFront?'scaleX(-1)':'none';}
 function cameraError(message){$('camera-error').textContent=message;$('camera-error').hidden=false;}
 async function request(action,{method='GET',tokenType,token,id,body,headers={}}={}){
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
@@ -23,17 +24,18 @@ async function startCamera({newSession=false}={}){
   const streamRequest=navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1440}},audio:false});
   streamRequest.then(value=>{if(expired||run!==cameraRun)value.getTracks().forEach(t=>t.stop());},()=>{});
   let next;try{next=await Promise.race([streamRequest,new Promise((_,reject)=>{permissionTimer=setTimeout(()=>{expired=true;reject(new Error('카메라 권한 응답을 기다리고 있습니다. 허용 창을 확인한 뒤 다시 연결해 주세요.'));},30000);})]);}finally{clearTimeout(permissionTimer);}
-  if(run!==cameraRun){next.getTracks().forEach(t=>t.stop());return;}stream=next;$('video').srcObject=next;$('video').hidden=false;await $('video').play();
+  if(run!==cameraRun){next.getTracks().forEach(t=>t.stop());return;}stream=next;actualFacing=next.getVideoTracks()[0].getSettings().facingMode||facing;$('video').srcObject=next;$('video').hidden=false;await $('video').play();
   $('camera-placeholder').hidden=true;$('camera-status').textContent='서버에 촬영 세션을 준비하고 있습니다.';
   if(!session||Date.parse(session.expiresAt)<Date.now()+60000){session=await(await request('start',{method:'POST',body:JSON.stringify({purpose:$('purpose').value}),headers:{'Content-Type':'application/json'}})).json();}
-  if(run!==cameraRun){stopCamera();return;}$('live-label').hidden=false;$('shutter').hidden=false;$('switch-camera').hidden=false;$('camera-status').textContent='준비됐습니다. 사진을 촬영해 주세요.';
+  if(run!==cameraRun){stopCamera();return;}$('live-label').hidden=false;$('shutter').hidden=false;$('switch-camera').hidden=false;updateMirror();$('camera-status').textContent='준비됐습니다. 사진을 촬영해 주세요.';
  }catch(e){if(run!==cameraRun)return;stopCamera();$('camera-placeholder').hidden=false;$('camera-status').textContent='촬영을 시작하지 못했습니다.';
  const text=e.name==='NotAllowedError'?'카메라 사용이 허용되지 않았습니다. 브라우저 주소창의 카메라 권한을 허용한 뒤 다시 연결해 주세요.':e.name==='NotFoundError'?'연결된 카메라를 찾을 수 없습니다. 카메라가 있는 휴대전화에서 열거나 노트북 카메라 연결을 확인해 주세요.':e.name==='NotReadableError'?'다른 앱이 카메라를 사용 중일 수 있습니다. 다른 카메라 앱을 닫고 다시 연결해 주세요.':e.message||'카메라를 연결하지 못했습니다.';cameraError(text);$('retry-camera').hidden=false;}finally{opening=false;$('begin').disabled=false;$('retry-camera').disabled=false;$('switch-camera').disabled=false;$('retake').disabled=false;}
 }
+$('mirror-camera').addEventListener('click',()=>{if(stream&&!busy){mirrorFront=!mirrorFront;updateMirror();}});
 $('begin').addEventListener('click',()=>startCamera({newSession:true}));$('retry-camera').addEventListener('click',()=>startCamera());$('retake').addEventListener('click',()=>startCamera());$('switch-camera').addEventListener('click',()=>{facing=facing==='environment'?'user':'environment';startCamera();});
 $('shutter').addEventListener('click',async()=>{
  if(!stream||busy||!session)return;const v=$('video');if(!v.videoWidth||!v.videoHeight){cameraError('카메라 화면을 준비하고 있습니다. 잠시 후 다시 촬영해 주세요.');return;}
- const run=cameraRun;capturedAt=new Date().toISOString();const scale=Math.min(1,1920/Math.max(v.videoWidth,v.videoHeight)),canvas=document.createElement('canvas');canvas.width=Math.round(v.videoWidth*scale);canvas.height=Math.round(v.videoHeight*scale);canvas.getContext('2d').drawImage(v,0,0,canvas.width,canvas.height);$('shutter').disabled=true;
+ const run=cameraRun;capturedAt=new Date().toISOString();const scale=Math.min(1,1920/Math.max(v.videoWidth,v.videoHeight)),canvas=document.createElement('canvas');canvas.width=Math.round(v.videoWidth*scale);canvas.height=Math.round(v.videoHeight*scale);const ctx=canvas.getContext('2d');if(actualFacing==='user'&&mirrorFront){ctx.translate(canvas.width,0);ctx.scale(-1,1);}ctx.drawImage(v,0,0,canvas.width,canvas.height);$('shutter').disabled=true;
  try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.92));if(run!==cameraRun)return;if(!blob)throw new Error('촬영본을 만들지 못했습니다. 다시 촬영해 주세요.');if(blob.size>5*1024*1024)throw new Error('촬영본이 너무 큽니다. 다시 촬영해 주세요.');photo=blob;stopCamera();if(photoUrl)URL.revokeObjectURL(photoUrl);photoUrl=URL.createObjectURL(blob);$('shot').src=photoUrl;$('shot').hidden=false;$('retake').hidden=false;$('save-area').hidden=false;$('save-detail').textContent=canvas.width+' × '+canvas.height+' · '+(blob.size/1024/1024).toFixed(2)+' MB · 서버 저장 전';$('camera-status').textContent='촬영됐습니다. 사진을 확인한 뒤 원본을 보관하세요.';$('camera-error').hidden=true;}
  catch(e){cameraError(e.message);}finally{$('shutter').disabled=false;}
 });
