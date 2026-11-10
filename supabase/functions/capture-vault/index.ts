@@ -51,6 +51,12 @@ Deno.serve(async req=>{
     if(sealed.length!==1)throw new Error('SEAL_ERROR');return json(receipt(sealed[0]),201);
    }catch(e){if(uploaded)await object(path,'DELETE');await db('capture_receipts?id=eq.'+id+'&status=eq.storing','PATCH',{status:'pending'});throw e;}
   }
+  if(req.method==='GET'&&action==='download'){
+   const userId=await authenticated(req),id=req.headers.get('x-record-id');if(!validId(id))return json({error:'사진 기록을 찾을 수 없습니다.'},404);
+   const rows=await db('capture_receipts?id=eq.'+id+'&owner_user_id=eq.'+userId+'&status=eq.ready&limit=1');if(!rows[0])return json({error:'내 사진이 아니거나 이미 삭제된 기록입니다.'},404);
+   const photo=await object(rows[0].object_path);if(!photo.ok)return json({error:'보관 원본을 불러오지 못했습니다.'},503);
+   return new Response(photo.body,{headers:{...cors,'Content-Type':'image/jpeg','Content-Disposition':'attachment; filename="SourceKeep_'+id+'.jpg"'}});
+  }
   if(req.method==='GET'&&(action==='view'||action==='image')){
    const token=req.headers.get('x-view-token');if(!validToken(token))return json({error:'확인 링크가 올바르지 않습니다.'},404);
    const ownerAccess=req.headers.has('authorization')?'&owner_user_id=eq.'+await authenticated(req):'&revoked_at=is.null';
