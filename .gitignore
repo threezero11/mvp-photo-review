@@ -13,3 +13,9 @@ dist/
 진행기록.md
 test-images/
 assets/ort/
+
+# Private presentation artifacts, test link capabilities and local administrative helper
+.ppt-build*/
+output/
+tmp/
+scripts/supabase-admin.mjs

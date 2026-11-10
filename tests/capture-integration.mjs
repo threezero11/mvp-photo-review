@@ -1,0 +1,19 @@
+import fs from 'node:fs';import assert from 'node:assert/strict';import {hash} from '../supabase/functions/capture-vault/protocol.mjs';
+const api='https://nhdqfexqymbdarbtmohj.supabase.co/functions/v1/capture-vault',base='https://nhdqfexqymbdarbtmohj.supabase.co';
+async function call(action,method='GET',headers={},body){return fetch(api+'?action='+action,{method,headers:{Origin:'https://mvp-photo-review.vercel.app',...headers},body});}
+const start=await call('start','POST',{'Content-Type':'application/json'},JSON.stringify({purpose:'general'}));assert.equal(start.status,201,'session creation: '+await start.clone().text());const session=await start.json();
+const image=fs.readFileSync('tmp/camera-tests/fixture-0.jpg');const upload={'Content-Type':'image/jpeg','x-record-id':session.id,'x-upload-token':session.uploadToken,'x-captured-at':new Date().toISOString()};
+const sealed=await call('seal','POST',upload,image);assert.equal(sealed.status,201,'first upload: '+await sealed.clone().text());const record=await sealed.json();assert.equal(record.sha256,await hash(image));assert.equal(record.width,640);console.log('PASS: actual server upload, server SHA-256, file dimensions');
+const repeat=await call('seal','POST',upload,image);assert.equal(repeat.status,200);console.log('PASS: safe retry of identical original');
+const replacement=await call('seal','POST',upload,fs.readFileSync('tmp/camera-tests/fixture-1.jpg'));assert.equal(replacement.status,409);console.log('PASS: replacement with another photo rejected');
+const view=await call('view','GET',{'x-view-token':session.viewToken});assert.equal(view.status,200);assert.equal((await view.json()).sha256,record.sha256);
+const original=await call('image','GET',{'x-view-token':session.viewToken});assert.equal(original.status,200);assert.equal(await hash(await original.arrayBuffer()),record.sha256);console.log('PASS: link metadata and exact stored original');
+for(const [action,headers]of [['view',{}],['view',{'x-view-token':'a'.repeat(43)}],['revoke',{'x-record-id':session.id,'x-owner-token':'b'.repeat(43)}]]){const r=await call(action,action==='revoke'?'POST':'GET',headers);assert.ok([401,404].includes(r.status));}console.log('PASS: missing/incorrect view and owner tokens rejected');
+const bad=await call('seal','POST',upload,new TextEncoder().encode('not an image'));assert.equal(bad.status,400);console.log('PASS: non-image payload rejected');
+const cors=await fetch(api+'?action=start',{method:'OPTIONS',headers:{Origin:'https://untrusted.example'}});assert.equal(cors.status,403);console.log('PASS: untrusted browser origin rejected');
+// One harmless, synthetic server-test record remains for browser viewing. It is NOT proof of camera origin.
+fs.writeFileSync('tmp/camera-tests/test-receipt.json',JSON.stringify({id:session.id,viewToken:session.viewToken,ownerToken:session.ownerToken,sha256:record.sha256}));
+// Verify share cancellation on a second synthetic fixture without touching the viewer record.
+const secondStart=await call('start','POST',{'Content-Type':'application/json'},JSON.stringify({purpose:'work'}));assert.equal(secondStart.status,201);const second=await secondStart.json();const secondSeal=await call('seal','POST',{'Content-Type':'image/jpeg','x-record-id':second.id,'x-upload-token':second.uploadToken},image);assert.equal(secondSeal.status,201);
+const revoke=await call('revoke','POST',{'x-record-id':second.id,'x-owner-token':second.ownerToken});assert.equal(revoke.status,200);assert.equal((await call('view','GET',{'x-view-token':second.viewToken})).status,404);assert.equal((await call('image','GET',{'x-view-token':second.viewToken})).status,404);console.log('PASS: sharing cancellation blocks metadata and image');
+const html=fs.readFileSync('index.html','utf8');assert.ok(!/type=["']file/.test(html));assert.ok(!html.includes('sb_secret_'));console.log('PASS: no gallery file input or secret key in browser code');

@@ -1,0 +1,8 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {hash,jpegDimensions,validToken,validId,receipt,MAX_BYTES} from '../supabase/functions/capture-vault/protocol.mjs';
+const frame=new Uint8Array([255,216,255,192,0,17,8,1,224,2,128,3,1,17,0,2,17,0,3,17,0,255,217]);
+test('JPEG dimensions come from file bytes, not client assertions',()=>{assert.deepEqual(jpegDimensions(frame),{width:640,height:480});const huge=frame.slice();huge[9]=32;assert.throws(()=>jpegDimensions(huge),/INVALID_DIMENSIONS/);});
+test('non-JPEG and incomplete files are rejected',()=>{assert.throws(()=>jpegDimensions(new Uint8Array([1,2,3])),/INVALID_JPEG/);assert.throws(()=>jpegDimensions(frame.slice(0,-2)),/INVALID_JPEG/);});
+test('hash changes when original bytes are modified',async()=>{assert.equal(await hash('abc'),'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');assert.notEqual(await hash(frame),await hash(frame.slice(1)));});
+test('capabilities have full entropy length and safe URL alphabet',()=>{assert.ok(validToken('a'.repeat(43)));assert.ok(!validToken('a'.repeat(42)));assert.ok(!validToken('../'+'a'.repeat(40)));assert.ok(validId('12345678-1234-4123-8123-123456789abc'));assert.ok(!validId('../secret'));});
+test('public receipt excludes view/upload/owner hashes, IP and storage path',()=>{const record=receipt({id:'test',view_hash:'secret',upload_hash:'secret',owner_hash:'secret',ip_hash:'ip',object_path:'private'});const text=JSON.stringify(record);assert.ok(!text.includes('secret'));assert.ok(!text.includes('private'));assert.equal(record.captureAssurance,'web-camera-flow-only');assert.equal(MAX_BYTES,5242880);});

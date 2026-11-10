@@ -1,0 +1,4 @@
+project_id = "mvp-photo-review"
+
+[functions.capture-vault]
+verify_jwt = false

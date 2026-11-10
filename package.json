@@ -2,10 +2,11 @@
   "name": "mvp-photo-review",
   "version": "0.1.0",
   "private": true,
-  "description": "AI 사진 분석 체험 및 사업화 검토 MVP",
+  "description": "직접 촬영 · 서버 원본 보관 · 확인 링크 카메라 MVP",
   "scripts": {
     "supabase": "supabase",
-    "build": "node build.cjs"
+    "build": "node build.cjs",
+    "test": "node --test tests/capture-vault.test.mjs"
   },
   "allowScripts": {
     "supabase": true
