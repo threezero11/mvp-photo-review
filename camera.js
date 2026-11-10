@@ -71,7 +71,7 @@ async function viewReceipt(token){
 }
 $('retry-receipt').addEventListener('click',()=>viewReceipt(currentToken));
 $('copy-link').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('share-link').value);$('copy-status').textContent='확인 링크를 복사했습니다.';}catch{$('share-link').focus();$('share-link').select();$('copy-status').textContent='자동 복사가 제한됐습니다. 선택된 링크를 직접 복사해 주세요.';}});
-$('native-share').addEventListener('click',async()=>{try{await navigator.share({title:'바로체크 · 보관 원본 확인',url:$('share-link').value});$('copy-status').textContent='공유 창을 열었습니다.';}catch(e){if(e.name!=='AbortError')$('copy-status').textContent='공유하지 못했습니다. 링크 복사를 이용해 주세요.';}});
+$('native-share').addEventListener('click',async()=>{try{await navigator.share({title:'소스킵 · 보관 원본 확인',url:$('share-link').value});$('copy-status').textContent='공유 창을 열었습니다.';}catch(e){if(e.name!=='AbortError')$('copy-status').textContent='공유하지 못했습니다. 링크 복사를 이용해 주세요.';}});
 $('revoke').addEventListener('click',async()=>{if(!currentRecord?.owned||busy)return;busy=true;$('revoke').disabled=true;try{await request(currentRecord.revoked?'share':'revoke',{method:'POST',auth:true,id:currentRecord.id});await viewReceipt(currentToken);}catch(e){$('copy-status').textContent=e.message;}finally{busy=false;$('revoke').disabled=false;}});
 $('edit-current').addEventListener('click',()=>{if(currentRecord?.owned)openEditor(currentRecord);});
 $('delete-current').addEventListener('click',()=>{if(currentRecord?.owned)deletePhoto(currentRecord);});
