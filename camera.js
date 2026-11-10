@@ -5,7 +5,9 @@ const purposes={general:'일반 사진 증빙',trade:'중고거래 · 물품 상
 let stream=null,session=null,photo=null,capturedAt=null,photoUrl=null,receiptUrl=null,facing='environment',mirrorFront=true,actualFacing='environment',busy=false,opening=false,cameraRun=0,currentToken=null,receiptRun=0;
 let nextAfterAuth='library',authMode='signin',currentRecord=null,libraryPhotos=[],shownPhotos=12,libraryRun=0,editingRecord=null,editorReturn=null;const thumbnails=new Map();let thumbnailObserver=null;
 function show(name){for(const id of ['home','auth','account','library','capture','receipt'])$(id).hidden=id!==name;window.scrollTo({top:0,behavior:'instant'});$(name+'-title').focus({preventScroll:true});document.querySelectorAll('[data-tab]').forEach(button=>{const active=button.dataset.tab===name||(name==='receipt'&&button.dataset.tab==='library');if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});}
-function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}$('video').srcObject=null;$('video').hidden=true;$('live-label').hidden=true;$('shutter').hidden=true;$('switch-camera').hidden=true;$('mirror-camera').hidden=true;}
+let countdownInterval=null;
+function cancelCountdown(){if(countdownInterval!==null)clearInterval(countdownInterval);countdownInterval=null;$('capture-countdown').hidden=true;$('cancel-timer').hidden=true;$('capture-timer').disabled=false;$('switch-camera').disabled=false;$('mirror-camera').disabled=false;$('shutter').disabled=false;}
+function stopCamera(){cancelCountdown();$('timer-control').hidden=true;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}$('video').srcObject=null;$('video').hidden=true;$('live-label').hidden=true;$('shutter').hidden=true;$('switch-camera').hidden=true;$('mirror-camera').hidden=true;}
 function updateMirror(){const front=actualFacing==='user';$('mirror-camera').hidden=!front||!stream;$('mirror-camera').setAttribute('aria-pressed',String(mirrorFront));$('mirror-camera').textContent='전면 좌우반전 '+(mirrorFront?'켜짐':'꺼짐');$('video').style.transform=front&&mirrorFront?'scaleX(-1)':'none';}
 function cameraError(message){$('camera-error').textContent=message;$('camera-error').hidden=false;}
 async function request(action,{method='GET',tokenType,token,id,body,headers={},auth=false}={}){
@@ -28,18 +30,27 @@ async function startCamera({newSession=false}={}){
   if(run!==cameraRun){next.getTracks().forEach(t=>t.stop());return;}stream=next;actualFacing=next.getVideoTracks()[0].getSettings().facingMode||facing;$('video').srcObject=next;$('video').hidden=false;await $('video').play();
   $('camera-placeholder').hidden=true;$('camera-status').textContent='서버에 촬영 세션을 준비하고 있습니다.';
   if(!session||Date.parse(session.expiresAt)<Date.now()+60000){session=await(await request('start',{method:'POST',auth:true,body:JSON.stringify({purpose:$('purpose').value}),headers:{'Content-Type':'application/json'}})).json();}
-  if(run!==cameraRun){stopCamera();return;}$('live-label').hidden=false;$('shutter').hidden=false;$('switch-camera').hidden=false;updateMirror();$('camera-status').textContent='준비됐습니다. 사진을 촬영해 주세요.';
+  if(run!==cameraRun){stopCamera();return;}$('live-label').hidden=false;$('timer-control').hidden=false;$('shutter').hidden=false;$('switch-camera').hidden=false;updateMirror();$('camera-status').textContent='준비됐습니다. 사진을 촬영해 주세요.';
  }catch(e){if(run!==cameraRun)return;stopCamera();$('camera-placeholder').hidden=false;$('camera-status').textContent='촬영을 시작하지 못했습니다.';
  const text=e.name==='NotAllowedError'?'카메라 사용이 허용되지 않았습니다. 브라우저 주소창의 카메라 권한을 허용한 뒤 다시 연결해 주세요.':e.name==='NotFoundError'?'연결된 카메라를 찾을 수 없습니다. 카메라가 있는 휴대전화에서 열거나 노트북 카메라 연결을 확인해 주세요.':e.name==='NotReadableError'?'다른 앱이 카메라를 사용 중일 수 있습니다. 다른 카메라 앱을 닫고 다시 연결해 주세요.':e.message||'카메라를 연결하지 못했습니다.';cameraError(text);$('retry-camera').hidden=false;}finally{opening=false;$('begin').disabled=false;$('retry-camera').disabled=false;$('switch-camera').disabled=false;$('retake').disabled=false;}
 }
 $('mirror-camera').addEventListener('click',()=>{if(stream&&!busy){mirrorFront=!mirrorFront;updateMirror();}});
 $('begin').addEventListener('click',()=>startCamera({newSession:true}));$('retry-camera').addEventListener('click',()=>startCamera());$('retake').addEventListener('click',()=>startCamera());$('switch-camera').addEventListener('click',()=>{facing=facing==='environment'?'user':'environment';startCamera();});
-$('shutter').addEventListener('click',async()=>{
+$('cancel-timer').addEventListener('click',()=>{cancelCountdown();$('camera-status').textContent='타이머를 취소했습니다. 다시 촬영할 수 있습니다.';$('shutter').focus();});
+$('shutter').addEventListener('click',()=>{
+ if(!stream||busy||!session||countdownInterval!==null||$('shutter').disabled)return;
+ const seconds=Number($('capture-timer').value);if(![3,10].includes(seconds)){takePhoto();return;}
+ const run=cameraRun,deadline=performance.now()+seconds*1000;let lastRemaining=seconds;
+ $('camera-error').hidden=true;$('capture-countdown').textContent=String(seconds);$('capture-countdown').hidden=false;$('cancel-timer').hidden=false;
+ $('shutter').disabled=true;$('capture-timer').disabled=true;$('switch-camera').disabled=true;$('mirror-camera').disabled=true;$('camera-status').textContent=seconds+'초 후 촬영합니다.';
+ countdownInterval=setInterval(()=>{if(run!==cameraRun||!stream||document.hidden){cancelCountdown();return;}const remaining=Math.max(0,Math.ceil((deadline-performance.now())/1000));if(remaining===0){cancelCountdown();takePhoto();return;}if(remaining!==lastRemaining){lastRemaining=remaining;$('capture-countdown').textContent=String(remaining);$('camera-status').textContent=remaining+'초 후 촬영합니다.';}},100);
+});
+async function takePhoto(){
  if(!stream||busy||!session)return;const v=$('video');if(!v.videoWidth||!v.videoHeight){cameraError('카메라 화면을 준비하고 있습니다. 잠시 후 다시 촬영해 주세요.');return;}
  const run=cameraRun;capturedAt=new Date().toISOString();const scale=Math.min(1,1920/Math.max(v.videoWidth,v.videoHeight)),canvas=document.createElement('canvas');canvas.width=Math.round(v.videoWidth*scale);canvas.height=Math.round(v.videoHeight*scale);const ctx=canvas.getContext('2d');if(actualFacing==='user'&&mirrorFront){ctx.translate(canvas.width,0);ctx.scale(-1,1);}ctx.drawImage(v,0,0,canvas.width,canvas.height);$('shutter').disabled=true;
  try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.92));if(run!==cameraRun)return;if(!blob)throw new Error('촬영본을 만들지 못했습니다. 다시 촬영해 주세요.');if(blob.size>5*1024*1024)throw new Error('촬영본이 너무 큽니다. 다시 촬영해 주세요.');photo=blob;stopCamera();if(photoUrl)URL.revokeObjectURL(photoUrl);photoUrl=URL.createObjectURL(blob);$('shot').src=photoUrl;$('shot').hidden=false;$('retake').hidden=false;$('save-area').hidden=false;$('save-detail').textContent=canvas.width+' × '+canvas.height+' · '+(blob.size/1024/1024).toFixed(2)+' MB · 서버 저장 전';$('camera-status').textContent='촬영됐습니다. 사진을 확인한 뒤 원본을 보관하세요.';$('camera-error').hidden=true;}
  catch(e){cameraError(e.message);}finally{$('shutter').disabled=false;}
-});
+}
 $('save').addEventListener('click',async()=>{
  if(busy||!photo||!session)return;if(!$('share-consent').checked){cameraError('링크를 가진 사람이 사진을 볼 수 있음을 먼저 확인해 주세요.');$('share-consent').focus();return;}
  busy=true;$('save').disabled=true;$('retake').disabled=true;$('capture-back').disabled=true;$('camera-error').hidden=true;$('camera-status').textContent='촬영본을 서버에 보관하고 있습니다. 화면을 닫지 마세요.';
