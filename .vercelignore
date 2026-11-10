@@ -2,6 +2,8 @@
 *
 !index.html
 !camera.js
+!auth.js
+!auth-config.js
 !package.json
 !package-lock.json
 !vercel.json
