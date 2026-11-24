@@ -2,7 +2,7 @@ import {MAX_BYTES,PURPOSES,validToken,validId,hash,jpegDimensions,receipt} from 
 const base=Deno.env.get('SUPABASE_URL');const key=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 const origins=new Set(['https://mvp-photo-review.vercel.app','http://127.0.0.1:5173','http://localhost:5173']);
 const randomToken=()=>btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
-function headers(req){const origin=req.headers.get('Origin');return{'Access-Control-Allow-Origin':origins.has(origin)?origin:'https://mvp-photo-review.vercel.app','Access-Control-Allow-Methods':'GET,POST,OPTIONS','Access-Control-Allow-Headers':'authorization,content-type,x-upload-token,x-record-id,x-view-token,x-owner-token,x-captured-at','Vary':'Origin','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'};}
+function headers(req){const origin=req.headers.get('Origin');return{'Access-Control-Allow-Origin':origins.has(origin)?origin:'https://mvp-photo-review.vercel.app','Access-Control-Allow-Methods':'GET,POST,OPTIONS','Access-Control-Allow-Headers':'authorization,content-type,x-upload-token,x-record-id,x-view-token,x-owner-token,x-captured-at,x-folder-id,x-folder-token','Vary':'Origin','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'};}
 async function db(path,method='GET',data,extra={}){const r=await fetch(base+'/rest/v1/'+path,{method,headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json',...extra},body:data===undefined?undefined:JSON.stringify(data)});if(!r.ok){const failure=await r.json().catch(()=>({}));throw new Error(failure.message||'DATABASE_ERROR');}return r.status===204?[]:r.json();}
 async function object(path,method='GET',bytes){return fetch(base+'/storage/v1/object/'+(method==='GET'?'authenticated/':'')+'capture-originals/'+path,{method,headers:{apikey:key,Authorization:'Bearer '+key,...(bytes?{'Content-Type':'image/jpeg','x-upsert':'false'}:{})},body:bytes});}
 async function authenticated(req){const authorization=req.headers.get('authorization');if(!authorization?.startsWith('Bearer '))throw new Error('AUTH_REQUIRED');const response=await fetch(base+'/auth/v1/user',{headers:{apikey:key,Authorization:authorization}});if(!response.ok)throw new Error('AUTH_REQUIRED');const user=await response.json();if(!user.id)throw new Error('AUTH_REQUIRED');return user.id;}
@@ -51,6 +51,55 @@ Deno.serve(async req=>{
     if(sealed.length!==1)throw new Error('SEAL_ERROR');return json(receipt(sealed[0]),201);
    }catch(e){if(uploaded)await object(path,'DELETE');await db('capture_receipts?id=eq.'+id+'&status=eq.storing','PATCH',{status:'pending'});throw e;}
   }
+  if(req.method==='GET'&&action==='folders'){
+   const userId=await authenticated(req),rows=await db('capture_folders?select=*,capture_folder_photos(photo_id)&owner_user_id=eq.'+userId+'&order=created_at.desc&limit=50');
+   return json({folders:await Promise.all(rows.map(async row=>({id:row.id,title:row.title,createdAt:row.created_at,revoked:!!row.revoked_at,viewToken:await decryptToken(row.view_token_ciphertext),photoIds:row.capture_folder_photos.map(item=>item.photo_id)})))});
+  }
+  if(req.method==='POST'&&['folder-create','folder-edit','folder-revoke','folder-share','folder-delete'].includes(action)){
+   const userId=await authenticated(req);let input={},title;
+   if(action==='folder-create'||action==='folder-edit'){input=await smallJson(req);title=typeof input.title==='string'?input.title.trim():'';if(!title||title.length>100||!Array.isArray(input.photoIds)||input.photoIds.length>200||!input.photoIds.every(validId))return json({error:'폴더 이름과 선택한 사진을 확인해 주세요.'},400);}
+   if(action==='folder-create'){
+    const existing=await db('capture_folders?select=id&owner_user_id=eq.'+userId+'&limit=50');if(existing.length>=50)return json({error:'폴더는 최대 50개까지 만들 수 있습니다.'},429);
+    const token=randomToken(),rows=await db('capture_folders','POST',{owner_user_id:userId,title,view_hash:await hash(token),view_token_ciphertext:await encryptToken(token)},{Prefer:'return=representation'});
+    try{await db('rpc/set_capture_folder_photos','POST',{p_folder_id:rows[0].id,p_owner_user_id:userId,p_photo_ids:input.photoIds});}catch(e){await db('capture_folders?id=eq.'+rows[0].id+'&owner_user_id=eq.'+userId,'DELETE');throw e;}
+    return json({id:rows[0].id,title,viewToken:token,photoIds:input.photoIds,revoked:false},201);
+   }
+   const id=req.headers.get('x-folder-id');if(!validId(id))return json({error:'폴더를 찾을 수 없습니다.'},404);
+   const path='capture_folders?id=eq.'+id+'&owner_user_id=eq.'+userId,rows=await db(path+'&limit=1');if(!rows[0])return json({error:'내 폴더가 아니거나 삭제된 폴더입니다.'},404);
+   if(action==='folder-delete'){await db(path,'DELETE');return json({deleted:true});}
+   if(action==='folder-edit'){await db('rpc/set_capture_folder_photos','POST',{p_folder_id:id,p_owner_user_id:userId,p_photo_ids:input.photoIds});await db(path,'PATCH',{title});return json({updated:true});}
+   await db(path,'PATCH',{revoked_at:action==='folder-revoke'?new Date().toISOString():null});return json({revoked:action==='folder-revoke'});
+  }
+  if(['GET','POST'].includes(req.method)&&['folder','folder-image','folder-visit'].includes(action)){
+   if((action==='folder-visit')!==(req.method==='POST'))return json({error:'지원하지 않는 요청입니다.'},405);
+   const token=req.headers.get('x-folder-token');if(!validToken(token))return json({error:'폴더 링크가 올바르지 않습니다.'},404);
+   const userId=req.headers.has('authorization')?await authenticated(req):null;
+   const folders=await db('capture_folders?view_hash=eq.'+await hash(token)+'&limit=1'),folder=folders[0];
+   if(!folder)return json({error:'폴더를 찾을 수 없거나 공유가 중단됐습니다.'},404);
+   const owned=!!userId&&folder.owner_user_id===userId;
+   if(req.headers.has('authorization')&&!owned)return json({error:'내 폴더가 아닙니다.'},404);
+   if(folder.revoked_at&&!owned)return json({error:'공유가 중단된 폴더입니다.'},404);
+   if(action==='folder'){
+    const members=await db('capture_folder_photos?folder_id=eq.'+folder.id+'&select=capture_receipts!inner(*)');
+    const photos=members.map(row=>row.capture_receipts).filter(row=>row.status==='ready'&&row.owner_user_id===folder.owner_user_id&&(owned||!row.revoked_at)).sort((a,b)=>b.received_at.localeCompare(a.received_at));
+    return json({folder:{id:folder.id,title:folder.title,revoked:!!folder.revoked_at,owned},photos:await Promise.all(photos.map(async row=>({...receipt(row),...(owned?{viewToken:await decryptToken(row.view_token_ciphertext)}:{})})))});
+   }
+   const id=req.headers.get('x-record-id');if(!validId(id))return json({error:'폴더의 사진을 찾을 수 없습니다.'},404);
+   const members=await db('capture_folder_photos?folder_id=eq.'+folder.id+'&photo_id=eq.'+id+'&select=capture_receipts!inner(*)'),row=members[0]?.capture_receipts;
+   if(!row||row.status!=='ready'||row.owner_user_id!==folder.owner_user_id||(!owned&&row.revoked_at))return json({error:'폴더에 없거나 공유가 중단된 사진입니다.'},404);
+   if(action==='folder-visit'){if(owned)return json({viewCount:Number(row.view_count||0),counted:false});const updated=await db('rpc/record_capture_visit','POST',{p_view_hash:row.view_hash});if(!updated[0])return json({error:'공유가 중단된 사진입니다.'},404);return json({viewCount:Number(updated[0].view_count),counted:true});}
+   const photo=await object(row.object_path);if(!photo.ok)return json({error:'보관 원본을 불러오지 못했습니다.'},503);
+   return new Response(photo.body,{headers:{...cors,'Content-Type':'image/jpeg','Content-Disposition':'inline; filename="SourceKeep-folder-photo.jpg"'}});
+  }
+  if(req.method==='POST'&&action==='visit'){
+   const token=req.headers.get('x-view-token');if(!validToken(token))return json({error:'확인 링크가 올바르지 않습니다.'},404);
+   const viewHash=await hash(token);const rows=await db('capture_receipts?view_hash=eq.'+viewHash+'&status=eq.ready&limit=1');const row=rows[0];
+   if(!row)return json({error:'사진을 찾을 수 없습니다.'},404);
+   if(req.headers.has('authorization')&&await authenticated(req)===row.owner_user_id)return json({viewCount:Number(row.view_count||0),counted:false});
+   if(row.revoked_at)return json({error:'공유가 중단된 사진입니다.'},404);
+   const updated=await db('rpc/record_capture_visit','POST',{p_view_hash:viewHash});if(!updated[0])return json({error:'사진을 찾을 수 없거나 공유가 중단됐습니다.'},404);
+   return json({viewCount:Number(updated[0].view_count),counted:true});
+  }
   if(req.method==='GET'&&action==='download'){
    const userId=await authenticated(req),id=req.headers.get('x-record-id');if(!validId(id))return json({error:'사진 기록을 찾을 수 없습니다.'},404);
    const rows=await db('capture_receipts?id=eq.'+id+'&owner_user_id=eq.'+userId+'&status=eq.ready&limit=1');if(!rows[0])return json({error:'내 사진이 아니거나 이미 삭제된 기록입니다.'},404);
@@ -77,5 +126,5 @@ Deno.serve(async req=>{
    await db(path,'PATCH',{revoked_at:action==='revoke'?new Date().toISOString():null});return json({revoked:action==='revoke',viewToken:await decryptToken(row.view_token_ciphertext)});
   }
   return json({error:'지원하지 않는 요청입니다.'},404);
- }catch(e){const m=String(e.message);if(m==='AUTH_REQUIRED')return json({error:'로그인이 필요합니다. 다시 로그인해 주세요.'},401);if(m==='BAD_REQUEST')return json({error:'입력 내용을 확인해 주세요.'},400);if(/RATE_LIMIT|DAILY_LIMIT|VAULT_CAPACITY/.test(m))return json({error:'체험 저장 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.'},429);if(/INVALID_JPEG|INVALID_DIMENSIONS/.test(m))return json({error:'사진 파일을 읽지 못했습니다. 다시 촬영해 주세요.'},400);console.error('capture-vault failure',m.replaceAll(key||'__none__','[redacted]').slice(0,180));return json({error:'서버에서 처리하지 못했습니다. 다시 시도해 주세요.'},503);}
+ }catch(e){const m=String(e.message);if(m==='AUTH_REQUIRED')return json({error:'로그인이 필요합니다. 다시 로그인해 주세요.'},401);if(/FOLDER_NOT_FOUND|FOLDER_PHOTO_FORBIDDEN/.test(m))return json({error:'폴더에 내 사진만 추가할 수 있습니다.'},404);if(m==='BAD_REQUEST')return json({error:'입력 내용을 확인해 주세요.'},400);if(/RATE_LIMIT|DAILY_LIMIT|VAULT_CAPACITY/.test(m))return json({error:'체험 저장 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.'},429);if(/INVALID_JPEG|INVALID_DIMENSIONS/.test(m))return json({error:'사진 파일을 읽지 못했습니다. 다시 촬영해 주세요.'},400);console.error('capture-vault failure',m.replaceAll(key||'__none__','[redacted]').slice(0,180));return json({error:'서버에서 처리하지 못했습니다. 다시 시도해 주세요.'},503);}
 });
